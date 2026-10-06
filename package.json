@@ -1,8 +1,8 @@
 {
-  "name": "matinee",
-  "version": "0.1.1",
+  "name": "astra",
+  "version": "0.2.0",
   "description": "A quiet place for your local movie collection",
-  "author": "Matinee",
+  "author": "Astra",
   "private": true,
   "type": "module",
   "main": "desktop/main.cjs",
@@ -14,6 +14,7 @@
     "setup:player": "node scripts/setup-player.mjs",
     "smoke": "npm run build && electron . --smoke-test",
     "test:desktop": "npm run build && node scripts/create-fixture.cjs && node scripts/integration.mjs",
+    "test:formats": "node scripts/create-fixture.cjs && node scripts/formats.mjs",
     "package": "npm run build && node scripts/check-player.mjs && electron-builder --win portable nsis --x64"
   },
   "dependencies": {
@@ -34,12 +35,12 @@
   },
   "build": {
     "appId": "local.matinee.desktop",
-    "productName": "Matinee",
+    "productName": "Astra",
     "directories": { "output": "release" },
     "files": ["dist/**/*", "desktop/**/*", "assets/**/*", "package.json"],
     "extraResources": [{ "from": "vendor/mpv", "to": "mpv" }, { "from": "THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md" }],
-    "win": { "target": "portable", "signExecutable": false, "icon": "assets/matinee.ico" },
-    "portable": { "artifactName": "Matinee-${version}-Windows.exe" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "runAfterFinish": false, "artifactName": "Matinee-${version}-Setup.exe" }
+    "win": { "target": "portable", "signExecutable": false, "icon": "assets/astra.ico" },
+    "portable": { "artifactName": "Astra-${version}-Windows.exe" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "runAfterFinish": false, "artifactName": "Astra-${version}-Setup.exe" }
   }
 }

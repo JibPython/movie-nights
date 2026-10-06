@@ -1,6 +1,6 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
-const VIDEO = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.wmv', '.mpg', '.mpeg', '.ts']);
+const VIDEO = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.wmv', '.mpg', '.mpeg', '.ts', '.m2ts', '.mts', '.flv', '.ogv']);
 const IMAGE = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp']);
 function validName(value) {
   const name = String(value ?? '').trim();
@@ -19,18 +19,7 @@ function compareEpisodes(a, b) {
   if (a.order != null || b.order != null) return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.title.localeCompare(b.title);
   return (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || a.title.localeCompare(b.title, undefined, { numeric: true });
 }
-function recommendations(items, current, shuffle = false, random = Math.random) {
-  const available = items.filter(i => !i.missing && i.id !== current?.id);
-  const seriesNext = current?.series ? available.filter(i => i.series === current.series && compareEpisodes(i, current) > 0).sort(compareEpisodes) : [];
-  const seen = new Set(current?.series ? [current.series] : []);
-  let rest = available.filter(i => !i.watched).sort((a, b) => Number(b.genre === current?.genre) - Number(a.genre === current?.genre) || compareEpisodes(a, b)).filter(i => {
-    if (!i.series) return true;
-    if (seen.has(i.series)) return false;
-    seen.add(i.series); return true;
-  });
-  if (shuffle) for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
-  return [...seriesNext, ...rest];
-}
 function cinemaAt(hour, start = 19, end = 7) { return start === end || (start > end ? hour >= start || hour < end : hour >= start && hour < end); }
 function newId() { return crypto.randomUUID(); }
-module.exports = { VIDEO, IMAGE, validName, within, episodeInfo, compareEpisodes, recommendations, cinemaAt, newId };
+const byName = (a,b) => a.title.localeCompare(b.title, undefined, {numeric:true,sensitivity:'base'}) || a.file.localeCompare(b.file);
+module.exports = { VIDEO, IMAGE, validName, within, episodeInfo, compareEpisodes, cinemaAt, newId, byName };

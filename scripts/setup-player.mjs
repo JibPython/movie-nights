@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const directory = path.resolve('vendor/mpv');
 await fs.mkdir(directory, { recursive: true });
-const headers = { 'User-Agent': 'Matinee-local-player-setup' };
+const headers = { 'User-Agent': 'Astra-local-player-setup' };
 const response = await fetch('https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20261006', { headers });
 if (!response.ok) throw new Error(`Player release lookup failed: ${response.status}`);
 const release = await response.json();

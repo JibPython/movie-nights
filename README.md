@@ -1,51 +1,30 @@
-# Matinee
+# Astra
 
-A Windows desktop cinema for movies and series you already have. Everything runs on your PC. No account, server, metadata service, telemetry, or media downloads.
+A quiet Windows desktop cinema for movies and series you already have. Entirely local: no account, server, telemetry, media downloads, or online metadata lookup.
 
-## Open the app
+## Run
 
-The first local build is in `release/`:
+Open `release/Astra-0.2.0-Windows.exe` for the portable app, or install with `release/Astra-0.2.0-Setup.exe`. Target: Windows 10/11 x64. The packaged app includes mpv and needs no developer tools or internet connection.
 
-- **Matinee-0.1.0-Windows.exe** — portable launcher; open it directly.
-- **Matinee-0.1.0-Setup.exe** — installer; creates a normal Windows installation.
-- **win-unpacked/Matinee.exe** — direct executable, with its accompanying runtime files.
+Choose your movie library. Browse its actual folders using cards and clickable breadcrumbs, for example `Movies > Bleach > Concentrated Bleach`. Root-level Recently Added and Continue Watching shelves, folder sections and video sections can be collapsed using their eye buttons. **Add a video** copies local video/artwork into a folder you choose inside the library; originals remain untouched.
 
-Target: Windows 10/11, x64. The included mpv engine is bundled; Node, npm, and an internet connection are not needed to run a packaged build. Personal preferences and the SQLite index are stored under `%APPDATA%/Matinee` in packaged builds (development Electron uses `%APPDATA%/matinee`). The portable launcher also uses application data; "portable" means installation is optional, not that the profile travels with the executable.
+## Included
 
-Choose your movie folder on first launch. The app scans existing videos, groups them by their first-level genre folder, and reads local cover art. You can also use **Add a movie** to copy a video and cover into the library. The original files remain untouched.
+- Astra branding with the original fonts, warm/Cinema themes, automatic 19:00–07:00 schedule and manual overrides.
+- Text size from 100–200% in Settings, default 125%.
+- Poster tilt/reflection, title placeholders, search and watched filters.
+- Display-title and file renaming, per-video artwork replacement/reset, hide without deleting, Undo and a restore list in Settings.
+- Native playback, volume/mute, seeking with cursor timestamps, 0.25–3× speed, audio/subtitle tracks and offsets.
+- Default watch page, fullscreen with fading controls, movable/resizable mini-player with pause/play and restore. Mini-player keeps playing while the main window is minimized.
+- Separate FIFO queue above naturally name-sorted Up Next suggestions from the playing video's folder. Play Queue, clear, individual play/remove, drag/arrows to reorder.
+- Shuffle queue/folder, repeat one/all, eight-second autoplay countdown. **Autoplay off always stops after the current video.** Explicit Next remains available.
+- Saved preferences, per-library queue, resume positions and watched status. Startup scan and manual refresh.
 
-```text
-Movies/
-  Horror/
-    Example Film/
-      movie.mkv
-      cover.jpg
-      subtitles.en.srt
-      metadata.json
-  Drama/
-    Example Series/
-      cover.webp
-      Season 01/
-        S01E01 - Pilot.mp4
-        S01E02 - Next episode.mp4
-```
+Recognized video containers: MP4, MKV, MOV, AVI, WMV, WebM, M4V, MPG/MPEG, TS/M2TS/MTS, FLV and OGV. Actual compatibility depends on the video/audio codecs and file health. Artwork: JPEG, PNG, WebP, BMP. Subtitles: embedded tracks, SRT, ASS/SSA and VTT. Automatic caption generation is planned; existing local subtitles work now.
 
-App imports write metadata sidecars automatically. Existing files do not need sidecars. Episode names such as `S01E02` or `1x02` provide initial ordering; use the card's `…` editor to correct series/season/episode information or set custom order numbers. Metadata genre overrides the folder-derived shelf without moving a file to another genre folder.
+Keyboard shortcuts while watching: Space play/pause, Left/Right seek ten seconds, Up/Down volume, M mute, F fullscreen, Escape leave fullscreen. Form fields retain normal editing behaviour.
 
-## Included in this first build
-
-- Warm and Cinema themes, with automatic 19:00–07:00 switching and editable hours. Manual theme choices persist until Automatic is selected again.
-- Genre shelves, Recently Added, Continue Watching, title/genre/series search, and watched filters.
-- Poster tilt and reflection, with reduced-motion support and locally drawn placeholders when art is missing.
-- Local imports with progress/cancellation; cover replacement; display-title, physical filename, and containing-folder renaming. Filename extensions are retained. Stop watching a title before editing it.
-- Native mpv playback in the desktop window, fullscreen, volume/mute, seeking, 0.25–3× speed, audio/subtitle tracks, external subtitles, and subtitle offsets.
-- Persistent resume positions, watched state, and a separate queue for each library. Drag queue rows or use the arrow controls to reorder them.
-- Local Up Next suggestions, season/episode ordering, custom ordering, autoplay countdown, shuffle suggestions, and repeat one/queue. Explicit queue choices come first. Autoplay controls automatic end-of-file progression; next can also be selected manually.
-- Startup scanning and manual refresh. An unavailable drive does not erase the saved index.
-
-Supported container targets include MP4, MKV, MOV, AVI, WebM, M4V, WMV, MPEG, and TS. Actual compatibility depends on the codecs and media file; the first automated native test uses a generated AVI. Cover targets are JPEG, PNG, WebP, BMP. Subtitle targets are SRT, ASS/SSA, VTT and embedded tracks. Files named `subtitles.en.srt` (and similar) beside the movie are loaded, along with mpv's matching-file discovery.
-
-Keyboard shortcuts while watching: Space play/pause, Left/Right seek 10 seconds, Up/Down volume, M mute, F fullscreen, Escape leave fullscreen. Text fields retain normal editing shortcuts.
+Preferences/index are stored in `%APPDATA%/Astra`. The previous Matinee database is copied safely on first Astra launch if no Astra database exists. The old database is left intact. The portable launcher uses the same application-data profile; it does not carry your profile beside the executable.
 
 ## Development
 
@@ -53,33 +32,31 @@ Keyboard shortcuts while watching: Space play/pause, Left/Right seek 10 seconds,
 npm ci
 npm run setup:player
 npm start
+
+npm test
+npm run test:desktop
+npm run test:formats
+npm run package
 ```
 
-`setup:player` downloads a pinned Windows mpv build once, verifies its release digest when provided, and saves provenance and license texts. It does not run when the app starts. `npm run dev` is an optional browser-only visual preview; desktop file access and playback require Electron via `npm start`.
+`setup:player` is a one-time developer download of a pinned mpv build, with digest/provenance/license capture. It never runs at application startup. `npm run dev` provides a browser visual preview; local filesystem and playback features require Electron.
 
-```powershell
-npm test                    # Filesystem, ordering, and schedule tests
-npm run test:desktop        # Isolated Electron end-to-end test, generated media
-npm run smoke              # Hidden Electron launch and renderer smoke test
-npm run package            # Windows x64 portable executable and installer
-```
-
-To include native decoding in the smoke test:
+Native smoke test:
 
 ```powershell
 node scripts/create-fixture.cjs
-$env:MATINEE_SMOKE_MEDIA = "$PWD\.test-output\fixture.avi"
+$env:ASTRA_SMOKE_MEDIA = "$PWD\.test-output\fixture.avi"
 npm run smoke
 ```
 
-Tests use `.test-output/` and temporary folders, not the real user library. The desktop integration test uses its own profile and generated sample movies. The sample collection is not shipped to users. `scripts/create-icon.cjs` regenerates the code-drawn application icon if needed.
+Tests use generated media and isolated profiles. `test:formats` encodes real containers with representative audio/video codecs, then decodes them using bundled mpv. Test media are not shipped. Renderer screenshots omit native video; smoke testing captures the decoded frame separately.
 
-## Architecture and current limits
+## Implementation notes
 
-Electron + React/TypeScript provides the desktop interface; the Electron main process owns local filesystem operations and Node's built-in SQLite database. mpv runs as a bundled native process with JSON commands over a Windows named pipe. Its video window is embedded in an owned, frameless native surface that follows the main window's player rectangle. Renderer Node access is disabled, IPC is limited, and HTTP/WebSocket requests from the app session are blocked.
+Electron + React/TypeScript, SQLite and native mpv over a local named pipe. The main process owns filesystem operations and playback ordering. A separate native transparent window draws fullscreen/mini controls above the video HWND. Renderer Node access is disabled, IPC is restricted by window role, and network requests are blocked.
 
-This is a working first release, not the end of the roadmap. Offline automatic caption generation is still planned. There is no filesystem watcher, transcoding, metadata scraping, or floating mini-player. Cover images are lazily loaded from local files; a persistent resized-thumbnail cache and large-library virtualization remain future work. Unrecognised series filenames need manual metadata. Arbitrary external file renames without sidecar IDs may appear as new titles; in-app renames preserve identity.
+Metadata sidecars are optional for existing files. App edits write per-file IDs/title/genre/series data; SQLite retains personal state. In-app renames preserve identity; external renames without sidecar IDs may appear as new videos. Missing drives do not erase the index.
 
-Native decode, controls, and desktop user flows are automated, but the full codec/audio/HDR matrix, multiple monitors, mixed DPI, sleep/resume, accessibility with assistive technology, and installation on a clean Windows PC still need hands-on testing. Video is a native window, so Playwright's renderer screenshot does not include the decoded picture; the smoke test captures a separate frame through mpv.
+Automatic offline captions, filesystem watching, resized thumbnail caching and large-library virtualization remain planned. Representative automated tests do not cover every codec, HDR/surround setup, mixed-DPI monitor arrangement, sleep/resume scenario, or clean-machine installation.
 
-See `AGENTS.md` for the preserved brief and implementation handoff. Third-party notices and redistribution considerations are in `THIRD_PARTY_NOTICES.md`.
+See [AGENTS.md](AGENTS.md) for the complete approved behaviour and handoff, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled-component notices.

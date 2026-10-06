@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const { createReadStream, createWriteStream } = require('node:fs');
 const { pipeline } = require('node:stream/promises');
 const path = require('node:path');
-const { VIDEO, IMAGE, validName, within, episodeInfo, newId } = require('./core.cjs');
+const { VIDEO, IMAGE, validName, within, episodeInfo, newId, byName } = require('./core.cjs');
 async function readJson(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw new Error(`Cannot read metadata: ${file}`); } }
 async function atomicJson(file, data) {
   const temp = `${file}.${newId()}.tmp`;
@@ -14,6 +14,29 @@ class Library {
   constructor(store, progress = () => {}) { this.store = store; this.progress = progress; this.busy = false; this.importController = null; }
   get root() { return this.store.get('root', ''); }
   items() { return this.root ? this.store.items(this.root) : []; }
+  get location() { return this.store.get(`location:${this.root}`, ''); }
+  async directory(relative = '') {
+    if (!this.root || typeof relative !== 'string' || path.isAbsolute(relative)) throw new Error('Choose a folder inside your library.');
+    const absolute = path.resolve(this.root, relative);
+    if (!within(this.root,absolute)) throw new Error('Folder is outside the library.');
+    const real = await fs.realpath(absolute);
+    if (!within(await fs.realpath(this.root),real) || !(await fs.stat(real)).isDirectory()) throw new Error('Folder is outside the library.');
+    return real;
+  }
+  async browse(relative) { const dir=await this.directory(relative); this.store.set(`location:${this.root}`,path.relative(this.root,dir)); return this.browser(); }
+  browser() {
+    const current=this.location;
+    const dirs=this.store.get(`directories:${this.root}`,[]);
+    return { path:current, folders:dirs.filter(d=>path.dirname(d.path)===(current||'.')).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'})), videoIds:this.items().filter(i=>!i.hidden&&path.dirname(i.file)===(current||'.')).sort(byName).map(i=>i.id) };
+  }
+  hide(id, hidden) {
+    const item=this.store.item(id);if(!item||item.root!==this.root)throw new Error('Video not found.');
+    this.store.save(this.root,{...item,hidden:Boolean(hidden)});
+  }
+  resetCover(id) {
+    const item=this.store.item(id);if(!item||item.root!==this.root)throw new Error('Video not found.');
+    this.store.save(this.root,{...item,cover:'',coverMode:'default'});
+  }
   async absolute(item) {
     if (!item || item.root !== this.root) throw new Error('This title is not in the active library.');
     const target = path.resolve(this.root, item.file);
@@ -31,9 +54,9 @@ class Library {
       await fs.access(root); // An unavailable drive must never erase the index.
       const previous = this.store.items(root);
       const byFile = new Map(previous.map(i => [i.file.toLowerCase(), i]));
-      const found = []; const usedIds = new Set();
+      const found = []; const directories=[]; const usedIds = new Set();
       const walk = async (directory, inherited = {}, inheritedCover = '', depth = 0) => {
-        if (depth > 16) return;
+        if (depth > 64) return;
         const entries = await fs.readdir(directory, { withFileTypes: true });
         const local = await readJson(path.join(directory, 'metadata.json'));
         const metadata = { ...inherited, ...local, files: local.files ?? {} };
@@ -44,7 +67,7 @@ class Library {
         for (const e of entries) {
           if (e.isSymbolicLink() || e.name.startsWith('.') || e.name === 'node_modules') continue;
           const absolute = path.join(directory, e.name);
-          if (e.isDirectory()) { await walk(absolute, { genre: metadata.genre, series: metadata.series }, cover, depth + 1); continue; }
+          if (e.isDirectory()) { directories.push({name:e.name,path:path.relative(root,absolute)}); await walk(absolute, { genre: metadata.genre, series: metadata.series }, cover, depth + 1); continue; }
           if (!e.isFile() || !VIDEO.has(path.extname(e.name).toLowerCase())) continue;
           const file = path.relative(root, absolute);
           const stat = await fs.stat(absolute);
@@ -59,7 +82,8 @@ class Library {
           const stem = path.parse(e.name).name;
           const onlyMovie = entries.filter(x => x.isFile() && VIDEO.has(path.extname(x.name).toLowerCase())).length === 1;
           found.push({
-            id, root, file, cover, title: String(perFile.title ?? (onlyMovie ? metadata.title : null) ?? (onlyMovie && !info.episode && pieces.length >= 3 ? path.basename(directory) : stem)).slice(0, 200),
+            id, root, file, cover: old?.coverMode==='default'?'':old?.customCover??(perFile.cover?path.relative(root,path.resolve(directory,perFile.cover)):cover), coverMode:old?.coverMode??(perFile.cover?'custom':'auto'), customCover:old?.customCover??(perFile.cover?path.relative(root,path.resolve(directory,perFile.cover)):null), hidden:old?.hidden??false,
+            title: String(perFile.title ?? (onlyMovie ? metadata.title : null) ?? stem).slice(0, 200),
             genre: String(perFile.genre ?? metadata.genre ?? (pieces.length > 1 ? pieces[0] : 'Unsorted')),
             series: String(perFile.series ?? metadata.series ?? inferredSeries),
             season: perFile.season ?? info.season, episode: perFile.episode ?? info.episode, order: perFile.order ?? null,
@@ -74,6 +98,8 @@ class Library {
       try {
         for (const item of previous) if (!usedIds.has(item.id)) this.store.save(root, { ...item, missing: true });
         for (const item of found) this.store.save(root, item);
+        this.store.set(`directories:${root}`,directories);
+        if(this.location&&!directories.some(d=>d.path===this.location))this.store.set(`location:${root}`,'');
         this.store.db.exec('COMMIT');
       } catch (e) { this.store.db.exec('ROLLBACK'); throw e; }
       return this.items();
@@ -81,40 +107,48 @@ class Library {
   }
   async importMovie(input) {
     if (this.busy || !this.root) throw new Error(this.busy ? 'A library operation is already running.' : 'Choose your library folder first.');
-    this.busy = true; this.importController = new AbortController();
-    const signal = this.importController.signal;
-    let stage;
+    this.busy=true;this.importController=new AbortController();
+    const signal=this.importController.signal;
+    let stage,published,artwork;
     try {
-      const title = validName(input.title); const genre = validName(input.genre || 'Unsorted');
-      const ext = path.extname(input.video).toLowerCase();
-      if (!VIDEO.has(ext)) throw new Error('Choose a supported video file.');
-      if (input.cover && !IMAGE.has(path.extname(input.cover).toLowerCase())) throw new Error('Choose a JPEG, PNG, WebP, or BMP cover.');
-      const series = input.series ? validName(input.series) : '';
-      for (const key of ['season','episode','order']) if (input[key] != null && (!Number.isInteger(input[key]) || input[key] < 0 || input[key] > 1000000)) throw new Error(`${key} must be a non-negative whole number.`);
-      const destination = path.join(this.root, genre, series || title, ...(series ? [`Season ${String(input.season ?? 1).padStart(2, '0')}`, title] : []));
-      if (await exists(destination)) throw new Error('That title already has a folder. Choose a different title.');
-      const realRoot = await fs.realpath(this.root);
-      // Validate existing ancestors before creating directories through them.
-      let ancestor = path.dirname(destination);
-      while (!(await exists(ancestor))) ancestor = path.dirname(ancestor);
-      if (!within(realRoot, await fs.realpath(ancestor))) throw new Error('The destination resolves outside the library.');
-      stage = path.join(this.root, `.matinee-import-${newId()}`);
-      await fs.mkdir(stage);
-      const stat = await fs.stat(input.video); let bytes = 0;
-      const source = createReadStream(input.video);
-      let last = 0;
-      source.on('data', chunk => { bytes += chunk.length; if (Date.now() - last > 100) { this.progress({ type: 'import', percent: Math.round(bytes / Math.max(1, stat.size) * 100), title }); last = Date.now(); } });
-      const filename = `${title}${ext}`;
-      await pipeline(source, createWriteStream(path.join(stage, filename), { flags: 'wx' }), { signal });
-      if (input.cover) await fs.copyFile(input.cover, path.join(stage, `cover${path.extname(input.cover).toLowerCase()}`));
+      const title=String(input.title??'').trim().slice(0,200);
+      if(!title)throw new Error('A display title is required.');
+      const ext=path.extname(input.video).toLowerCase();
+      if(!VIDEO.has(ext))throw new Error('Choose a supported video file.');
+      if(input.cover&&!IMAGE.has(path.extname(input.cover).toLowerCase()))throw new Error('Unsupported cover format.');
+      for(const key of ['season','episode','order'])if(input[key]!=null&&(!Number.isInteger(input[key])||input[key]<0))throw new Error(`${key} must be a non-negative whole number.`);
+      const directory=await this.directory(input.folder??this.location);
+      const filename=validName(input.filename||path.parse(input.video).name)+ext;
+      const destination=path.join(directory,filename);
+      if(await exists(destination))throw new Error('A file with that name already exists. Choose a different filename.');
+      const id=newId();
+      stage=path.join(this.root,`.astra-import-${id}`);await fs.mkdir(stage);
+      const stat=await fs.stat(input.video);let bytes=0,last=0;
+      const source=createReadStream(input.video);
+      source.on('data',chunk=>{bytes+=chunk.length;if(Date.now()-last>100){this.progress({type:'import',percent:Math.round(bytes/Math.max(1,stat.size)*100),title});last=Date.now();}});
+      const staged=path.join(stage,filename);
+      await pipeline(source,createWriteStream(staged,{flags:'wx'}),{signal});
       signal.throwIfAborted();
-      await atomicJson(path.join(stage, 'metadata.json'), { version: 1, title, genre, series, files: { [filename]: { id: newId(), title, series, season: series ? Number(input.season ?? 1) : null, episode: series ? Number(input.episode ?? 1) : null, order: input.order ?? null } } });
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      await fs.rename(stage, destination); stage = null;
-      this.progress({ type: 'import', percent: 100, title });
+      if(input.cover){
+        const artDir=path.join(directory,'.astra-art');await fs.mkdir(artDir,{recursive:true});
+        if(!within(await fs.realpath(this.root),await fs.realpath(artDir)))throw new Error('Artwork directory is outside the library.');
+        artwork=path.join(artDir,`${id}${path.extname(input.cover).toLowerCase()}`);
+        await fs.copyFile(input.cover,artwork,require('node:fs').constants.COPYFILE_EXCL);
+      }
+      signal.throwIfAborted();
+      // Hard-link publication is atomic and fails if an external writer created the destination.
+      await fs.link(staged,destination);published=destination;
+      const metadataPath=path.join(directory,'metadata.json');const meta=await readJson(metadataPath);
+      await atomicJson(metadataPath,{...meta,version:1,files:{...meta.files,[filename]:{id,title,genre:String(input.genre||'Unsorted'),series:String(input.series||''),season:input.season??null,episode:input.episode??null,order:input.order??null,...(artwork?{cover:path.relative(directory,artwork)}:{})}}});
+      published=null;artwork=null;
+      this.progress({type:'import',percent:100,title});
+    } catch(e) {
+      if(published)await fs.rm(published,{force:true});
+      if(artwork)await fs.rm(artwork,{force:true});
+      throw e;
     } finally {
-      if (stage && within(this.root, stage) && path.basename(stage).startsWith('.matinee-import-')) await fs.rm(stage, { recursive: true, force: true });
-      this.busy = false; this.importController = null;
+      if(stage&&within(this.root,stage)&&path.basename(stage).startsWith('.astra-import-'))await fs.rm(stage,{recursive:true,force:true});
+      this.busy=false;this.importController=null;
     }
     return this.scan();
   }
@@ -135,20 +169,23 @@ class Library {
       if (newDirectory !== directory && await exists(newDirectory)) throw new Error('A folder with that name already exists.');
       const metadataPath = path.join(directory, 'metadata.json'); const meta = await readJson(metadataPath);
       const next = { ...item, title, genre: validName(changes.genre ?? item.genre), series: String(changes.series ?? item.series).trim(), season: changes.season ?? null, episode: changes.episode ?? null, order: changes.order ?? null, file: path.relative(this.root, newPath) };
-      const entry = { id, title, genre: next.genre, series: next.series, season: next.season, episode: next.episode, order: next.order };
+      const entry = { ...meta.files?.[oldName], id, title, genre: next.genre, series: next.series, season: next.season, episode: next.episode, order: next.order };
       const files = { ...meta.files }; delete files[oldName]; files[newName] = entry;
       let coverFile;
       if (changes.coverSource) {
         if (!IMAGE.has(path.extname(changes.coverSource).toLowerCase())) throw new Error('Unsupported cover format.');
-        coverFile = `cover-${newId()}${path.extname(changes.coverSource).toLowerCase()}`;
+        const artDir=path.join(directory,'.astra-art');await fs.mkdir(artDir,{recursive:true});
+        if(!within(await fs.realpath(this.root),await fs.realpath(artDir)))throw new Error('Artwork directory is outside the library.');
+        coverFile = path.join('.astra-art',`${newId()}${path.extname(changes.coverSource).toLowerCase()}`);
         await fs.copyFile(changes.coverSource,path.join(directory,coverFile));
         next.cover = path.relative(this.root,path.join(directory,coverFile));
+        next.customCover=next.cover;next.coverMode='custom';entry.cover=coverFile;
       }
       let renamed = false, moved = false, metadataWritten = false;
       const previousMetaExists = await exists(metadataPath);
       try {
         if (newName !== oldName) { await fs.rename(absolute,newPath); renamed = true; }
-        await atomicJson(metadataPath,{...meta,version:1,files,...(coverFile?{cover:coverFile}:{})}); metadataWritten = true;
+        await atomicJson(metadataPath,{...meta,version:1,files}); metadataWritten = true;
         if (newDirectory !== directory) { await fs.rename(directory,newDirectory); moved = true; }
         const relocate = relative => {
           if (!relative || !within(directory,path.resolve(this.root,relative))) return relative;
@@ -157,10 +194,8 @@ class Library {
         this.store.db.exec('BEGIN');
         try {
           for (const sibling of this.items()) {
-            const sameDirectory = path.dirname(path.resolve(this.root,sibling.file)) === directory;
             const updated = sibling.id === id ? next : sibling;
-            if (moved) { updated.file = relocate(updated.file); updated.cover = relocate(updated.cover); }
-            if (coverFile && sameDirectory) updated.cover = relocate(path.relative(this.root,path.join(directory,coverFile)));
+            if (moved) { updated.file = relocate(updated.file); updated.cover = relocate(updated.cover); updated.customCover=relocate(updated.customCover); }
             this.store.save(this.root,updated);
           }
           this.store.db.exec('COMMIT');

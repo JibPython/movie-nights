@@ -37,10 +37,10 @@ test('Recommendations prioritise next episode and exclude missing titles',()=>{
   const results=recommendations(items,current,true,()=>.5);
   assert.equal(results[0].id,'2');assert.equal(results.some(i=>i.id==='4'),false);assert.equal(results.some(i=>i.id==='1'),false);
 });
-test('Import copies media, keeps the source, and detects duplicate folders',async t=>{
+test('Import copies into the chosen directory, keeps the source, and rejects collisions',async t=>{
   const {temp,library}=await fixture(t);const video=path.join(temp,'source.mp4');await fs.writeFile(video,'movie-data');
   const items=await library.importMovie({title:'Example',genre:'Drama',video});
-  assert.equal(items.length,1);assert.equal(await fs.readFile(video,'utf8'),'movie-data');assert.match(items[0].file,/Example/);
+  assert.equal(items.length,1);assert.equal(await fs.readFile(video,'utf8'),'movie-data');assert.equal(items[0].file,'source.mp4');assert.equal(items[0].title,'Example');
   await assert.rejects(library.importMovie({title:'Example',genre:'Drama',video}),/already/);
 });
 test('Renaming preserves progress and stable ID through a rescan',async t=>{
@@ -71,10 +71,33 @@ test('Cancelled copy never publishes partial media and leaves original intact',a
 test('Folder rename and artwork replacement preserve IDs and sibling files',async t=>{
   const {temp,root,library}=await fixture(t);const video=path.join(temp,'source.mp4');await fs.writeFile(video,'video');
   const cover=path.join(temp,'art.png');await fs.writeFile(cover,'artwork');
-  const [item]=await library.importMovie({title:'Old',genre:'Drama',video});
+  await fs.mkdir(path.join(root,'Drama','Old'),{recursive:true});
+  const [item]=await library.importMovie({title:'Old',genre:'Drama',video,folder:path.join('Drama','Old')});
   const originalDirectory=path.join(root,path.dirname(item.file));await fs.writeFile(path.join(originalDirectory,'subtitles.en.srt'),'captions');
   library.progressFor(item.id,20,100);
   await library.edit(item.id,{title:'New',filename:'New',foldername:'New folder',genre:'Drama',coverSource:cover});
   const [updated]=await library.scan();assert.equal(updated.id,item.id);assert.equal(updated.position,20);assert.match(updated.file,/New folder/);assert.match(updated.cover,/New folder/);
   assert.equal(await fs.readFile(path.join(root,path.dirname(updated.file),'subtitles.en.srt'),'utf8'),'captions');
+});
+test('Browser exposes immediate folders and videos without flattening descendants',async t=>{
+  const {root,library}=await fixture(t);
+  await fs.mkdir(path.join(root,'Bleach','Concentrated Bleach'),{recursive:true});
+  await fs.writeFile(path.join(root,'Bleach','Concentrated Bleach','Episode 10.mkv'),'10');
+  await fs.writeFile(path.join(root,'Bleach','Concentrated Bleach','Episode 2.mkv'),'2');
+  await library.scan();assert.deepEqual(library.browser().folders.map(f=>f.name),['Bleach']);assert.equal(library.browser().videoIds.length,0);
+  await library.browse('Bleach');assert.equal(library.browser().videoIds.length,0);assert.equal(library.browser().folders[0].name,'Concentrated Bleach');
+  await library.browse(path.join('Bleach','Concentrated Bleach'));
+  assert.deepEqual(library.browser().videoIds.map(id=>library.store.item(id).title),['Episode 2','Episode 10']);
+  await assert.rejects(library.browse('..'),/outside/);
+});
+test('Hide and cover reset survive rescans, preserve files, and do not affect siblings',async t=>{
+  const {temp,root,library}=await fixture(t);
+  const video=path.join(temp,'source.mp4'),cover=path.join(temp,'art.png');await fs.writeFile(video,'unchanged video');await fs.writeFile(cover,'unchanged artwork');
+  await library.importMovie({title:'One',video,cover,filename:'One'});await library.importMovie({title:'Two',video,cover,filename:'Two'});
+  const [one,two]=library.items().sort((a,b)=>a.title.localeCompare(b.title));const originalCover=one.cover;
+  library.hide(one.id,true);library.resetCover(one.id);await library.scan();
+  assert.equal(library.store.item(one.id).hidden,true);assert.equal(library.store.item(one.id).cover,'');assert.equal(library.store.item(two.id).cover,two.cover);
+  assert.equal(await fs.readFile(path.join(root,one.file),'utf8'),'unchanged video');assert.equal(await fs.readFile(path.join(root,originalCover),'utf8'),'unchanged artwork');
+  assert.deepEqual(library.browser().videoIds,[two.id]);library.hide(one.id,false);assert.equal(library.browser().videoIds.length,2);
+  await library.edit(one.id,{title:'One',genre:'Drama',coverSource:cover});await library.scan();assert.equal(library.store.item(one.id).coverMode,'custom');assert.notEqual(library.store.item(one.id).cover,'');assert.equal(library.store.item(two.id).cover,two.cover);
 });
