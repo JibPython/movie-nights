@@ -1,0 +1,31 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+const require = createRequire(import.meta.url);
+const directory = path.resolve('vendor/mpv');
+await fs.mkdir(directory, { recursive: true });
+const headers = { 'User-Agent': 'Matinee-local-player-setup' };
+const response = await fetch('https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20261006', { headers });
+if (!response.ok) throw new Error(`Player release lookup failed: ${response.status}`);
+const release = await response.json();
+const asset = release.assets.find(a => /^mpv-x86_64-[\d].*\.7z$/.test(a.name));
+if (!asset) throw new Error('No Windows x64 mpv build found.');
+console.log(`Downloading ${asset.name} from the mpv Windows build project…`);
+const download = await fetch(asset.browser_download_url, { headers });
+if (!download.ok) throw new Error(`Player download failed: ${download.status}`);
+const archive = path.resolve('vendor', asset.name);
+const bytes = Buffer.from(await download.arrayBuffer());
+const sha256 = createHash('sha256').update(bytes).digest('hex');
+if (asset.digest?.startsWith('sha256:') && asset.digest !== `sha256:${sha256}`) throw new Error('Player download checksum mismatch.');
+await fs.writeFile(archive, bytes);
+execFileSync(require('7zip-bin').path7za, ['x', archive, `-o${directory}`, '-y'], { stdio: 'inherit', windowsHide: true });
+await fs.writeFile(path.join(directory, 'BUILD-SOURCE.json'), JSON.stringify({ source: release.html_url, asset: asset.name, url: asset.browser_download_url, sha256, verifiedReleaseDigest: !!asset.digest, downloadedAt: new Date().toISOString(), note: 'mpv Windows build. Preserve accompanying licenses when distributing. Source/build recipes are linked from this release.' }, null, 2));
+for (const license of ['LICENSE.GPL','LICENSE.LGPL']) {
+  const response = await fetch(`https://raw.githubusercontent.com/mpv-player/mpv/6c092d978b/${license}`,{headers});
+  if (!response.ok) throw new Error(`Could not download ${license}: ${response.status}`);
+  await fs.writeFile(path.join(directory,license),await response.text());
+}
+await fs.rm(archive);
+console.log('Local playback engine ready. No network is used during playback.');

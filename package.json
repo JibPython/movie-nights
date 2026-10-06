@@ -1,0 +1,45 @@
+{
+  "name": "matinee",
+  "version": "0.1.1",
+  "description": "A quiet place for your local movie collection",
+  "author": "Matinee",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "start": "npm run build && electron .",
+    "test": "node --test tests/*.test.cjs",
+    "setup:player": "node scripts/setup-player.mjs",
+    "smoke": "npm run build && electron . --smoke-test",
+    "test:desktop": "npm run build && node scripts/create-fixture.cjs && node scripts/integration.mjs",
+    "package": "npm run build && node scripts/check-player.mjs && electron-builder --win portable nsis --x64"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "44.5.1",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.1.0",
+    "7zip-bin": "^5.2.0",
+    "playwright": "^1.51.0"
+  },
+  "build": {
+    "appId": "local.matinee.desktop",
+    "productName": "Matinee",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "desktop/**/*", "assets/**/*", "package.json"],
+    "extraResources": [{ "from": "vendor/mpv", "to": "mpv" }, { "from": "THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md" }],
+    "win": { "target": "portable", "signExecutable": false, "icon": "assets/matinee.ico" },
+    "portable": { "artifactName": "Matinee-${version}-Windows.exe" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "runAfterFinish": false, "artifactName": "Matinee-${version}-Setup.exe" }
+  }
+}
