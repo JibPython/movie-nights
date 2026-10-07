@@ -1,6 +1,6 @@
 {
   "name": "astra",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A quiet place for your local movie collection",
   "author": "Astra",
   "private": true,
@@ -15,6 +15,8 @@
     "smoke": "npm run build && electron . --smoke-test",
     "test:desktop": "npm run build && node scripts/create-fixture.cjs && node scripts/integration.mjs",
     "test:formats": "node scripts/create-fixture.cjs && node scripts/formats.mjs",
+    "test:playback": "npm run build && node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/playback-check.mjs && node scripts/playback-check.mjs --compatibility",
+    "test:packaged": "node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/playback-check.mjs --packaged && node scripts/playback-check.mjs --packaged --compatibility",
     "package": "npm run build && node scripts/check-player.mjs && electron-builder --win portable nsis --x64"
   },
   "dependencies": {

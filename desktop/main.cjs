@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, powerSaveBlocker, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, powerSaveBlocker, screen, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 const { Store } = require('./store.cjs');
 const { Library } = require('./library.cjs');
 const { Player } = require('./player.cjs');
+const { PlaybackLog } = require('./playback-log.cjs');
 const { Sequence } = require('./sequence.cjs');
 const { migrateProfile } = require('./migrate.cjs');
 const { VIDEO, within, newId } = require('./core.cjs');
@@ -16,10 +17,10 @@ const profile = smoke || testSession ? path.resolve('.test-output',testSession?'
 app.setPath('userData',profile);
 if(!app.requestSingleInstanceLock()){app.quit();return;}
 protocol.registerSchemesAsPrivileged([{ scheme:'art', privileges:{standard:true,secure:true,supportFetchAPI:true} }]);
-let main,store,library,player,sequence,blocker,progressTimer,countdownTimer,countdown=null,opening=false;
+let main,store,library,player,sequence,blocker,progressTimer,countdownTimer,countdown=null,opening=false,playbackAttempt=0,progressId=null;
 let operations=Promise.resolve();
 const windows=new Map();const selections=new Map();
-const defaults={theme:'auto',cinemaStart:19,cinemaEnd:7,autoplay:true,shuffle:false,repeat:'off',volume:80,speed:1,textScale:125};
+const defaults={theme:'auto',cinemaStart:19,cinemaEnd:7,autoplay:true,shuffle:false,repeat:'off',volume:80,speed:1,textScale:125,playbackCompatibility:false};
 function preferences(){const prefs={...defaults,...store.get('preferences',{})};if(prefs.repeat==='queue')prefs.repeat='all';return prefs;}
 function send(event,data){for(const [win] of windows)if(!win.isDestroyed())win.webContents.send(event,data);}
 function queueKey(){return `queue:${library.root}`;}
@@ -27,7 +28,7 @@ function playback(){return {currentId:sequence?.currentId??null,mode:player?.mod
 function snapshot(){return {root:library.root,items:library.items(),browser:library.browser(),queue:sequence.clean(sequence.queue),upNext:sequence.upNext(),settings:preferences(),collapsed:store.get(`collapsed:${library.root}`,{}),playback:playback(),player:player.state,playerReady:fs.existsSync(player.executable)};}
 function changed(){store.set(queueKey(),sequence.queue);send('library',snapshot());}
 function resetSequence(){sequence=new Sequence({items:()=>library.items(),queue:store.get(queueKey(),[])});sequence.configure(preferences());}
-function saveProgress(ended=false){if(sequence?.currentId)library.progressFor(sequence.currentId,player.state.position??0,player.state.duration??0,ended);}
+function saveProgress(ended=false){if(progressId&&sequence?.currentId===progressId)library.progressFor(progressId,player.state.position??0,player.state.duration??0,ended);}
 function cancelCountdown(){clearInterval(countdownTimer);countdownTimer=null;countdown=null;send('playback',playback());}
 function serial(work){const result=operations.then(work);operations=result.catch(()=>{});return result;}
 function registerWindow(win,role){
@@ -37,23 +38,33 @@ function registerWindow(win,role){
 }
 async function nativeDialog(options){const old=player.hidden;player.hidden=true;player.layout();try{return await dialog.showOpenDialog(main,options);}finally{player.hidden=old;player.layout();}}
 async function load(id,{advance=false,fromQueue=false,restart=false}={}){
+  playbackAttempt++;
   const item=store.item(id);if(!item||item.hidden||item.missing)throw new Error('Video is hidden or unavailable.');
-  const file=await library.absolute(item);saveProgress();opening=true;send('playback',playback());
+  const file=await library.absolute(item);saveProgress();progressId=null;opening=true;send('playback',playback());
   try{
-    await player.load(file,restart||item.watched?0:item.position);
+    await player.load(file,restart||item.watched?0:item.position,{compatibility:preferences().playbackCompatibility});
     if(advance)sequence.consume(id);else sequence.start(id,fromQueue);
+    progressId=id;
     const entries=await fsp.readdir(path.dirname(file),{withFileTypes:true});
     for(const entry of entries.filter(e=>e.isFile()&&/^subtitles(?:\.[a-z0-9_-]+)*\.(srt|ass|ssa|vtt)$/i.test(e.name)))await player.command(['sub-add',path.join(path.dirname(file),entry.name),'auto']).catch(()=>{});
     const prefs=preferences();await player.command(['set_property','volume',prefs.volume]);await player.command(['set_property','speed',prefs.speed]);
     if(player.mode==='default')await player.setMode('default');
-  }finally{opening=false;changed();send('playback',playback());}
+  }catch(error){
+    progressId=null;
+    if(!advance)sequence.currentId=null;
+    await player.stop();
+    if(blocker!=null&&powerSaveBlocker.isStarted(blocker))powerSaveBlocker.stop(blocker);
+    throw error;
+  }
+  finally{opening=false;changed();send('playback',playback());}
 }
 async function advance(automatic=false){
   cancelCountdown();if(automatic&&!preferences().autoplay)return;
+  let failed=false;
   for(let attempt=0;attempt<library.items().length;attempt++){
-    const id=sequence.next({automatic,autoplay:preferences().autoplay});if(!id){changed();return;}
-    try{await load(id,{advance:true,restart:true});return;}catch(e){sequence.failed.add(id);sequence.remove(id);send('failure',`Skipped unavailable video: ${e.message}`);}
-  }changed();
+    const id=sequence.next({automatic,autoplay:preferences().autoplay});if(!id){if(failed)await stop();else changed();return;}
+    try{await load(id,{advance:true,restart:true});return;}catch(e){failed=true;sequence.failed.add(id);sequence.remove(id);send('failure',`Skipped unavailable video: ${e.message}`);}
+  }if(failed)await stop();else changed();
 }
 function ended(){
   if(opening||countdownTimer)return;saveProgress(true);changed();if(!preferences().autoplay)return;
@@ -61,10 +72,11 @@ function ended(){
   countdown=8;send('playback',playback());
   countdownTimer=setInterval(()=>{countdown--;send('playback',playback());if(countdown<=0)void serial(()=>advance(true)).catch(e=>send('failure',e.message));},1000);
 }
-async function stop(){cancelCountdown();saveProgress();sequence.currentId=null;sequence.source='folder';sequence.cycle=[];sequence.deck=[];await player.stop();if(blocker!=null&&powerSaveBlocker.isStarted(blocker))powerSaveBlocker.stop(blocker);changed();}
+async function stop(){playbackAttempt++;cancelCountdown();saveProgress();progressId=null;sequence.currentId=null;sequence.source='folder';sequence.cycle=[];sequence.deck=[];await player.stop();if(blocker!=null&&powerSaveBlocker.isStarted(blocker))powerSaveBlocker.stop(blocker);changed();}
 async function action(method,...args){
   switch(method){
     case 'snapshot':return snapshot();
+    case 'openPlaybackLog':shell.showItemInFolder(player.log.file);return;
     case 'chooseRoot':{
       if(library.busy)throw new Error('Wait for the library operation to finish.');
       const result=await nativeDialog({title:'Choose your movie library',properties:['openDirectory']});
@@ -113,7 +125,7 @@ async function action(method,...args){
       if(input.theme!=null){if(!['auto','warm','cinema'].includes(input.theme))throw new Error('Invalid theme.');prefs.theme=input.theme;}
       if(input.textScale!=null){if(!Number.isInteger(input.textScale)||input.textScale<100||input.textScale>200||input.textScale%5)throw new Error('Text size must be 100–200%, in 5% steps.');prefs.textScale=input.textScale;}
       for(const key of ['cinemaStart','cinemaEnd'])if(input[key]!=null){if(!Number.isInteger(input[key])||input[key]<0||input[key]>23)throw new Error('Schedule hours must be 0–23.');prefs[key]=input[key];}
-      for(const key of ['autoplay','shuffle'])if(input[key]!=null)prefs[key]=Boolean(input[key]);
+      for(const key of ['autoplay','shuffle','playbackCompatibility'])if(input[key]!=null)prefs[key]=Boolean(input[key]);
       if(input.repeat!=null){if(!['off','one','all'].includes(input.repeat))throw new Error('Invalid repeat mode.');prefs.repeat=input.repeat;}
       for(const [key,min,max]of[['volume',0,100],['speed',.25,3]])if(input[key]!=null){if(!Number.isFinite(input[key])||input[key]<min||input[key]>max)throw new Error(`Invalid ${key}.`);prefs[key]=input[key];}
       store.set('preferences',prefs);sequence.configure(prefs);if(!prefs.autoplay)cancelCountdown();changed();return prefs;
@@ -152,7 +164,9 @@ app.whenReady().then(async()=>{
   store=new Store(profile);library=new Library(store,data=>send('progress',data));resetSequence();
   main=new BrowserWindow({width:1440,height:960,minWidth:960,minHeight:640,frame:false,show:false,backgroundColor:'#f4f0e8',title:'Astra',icon:path.resolve(__dirname,'../assets/astra.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
   registerWindow(main,'main');
-  player=new Player(main,app.isPackaged?path.join(process.resourcesPath,'mpv','mpv.exe'):path.resolve(__dirname,'../vendor/mpv/mpv.exe'),{registerWindow,miniBounds:store.get('miniBounds',null)});
+  const log=new PlaybackLog(path.join(profile,'logs'));
+  log.write('app-start',{version:app.getVersion(),packaged:app.isPackaged,electron:process.versions.electron,arch:process.arch,windows:require('node:os').release()});
+  player=new Player(main,app.isPackaged?path.join(process.resourcesPath,'mpv','mpv.exe'):path.resolve(__dirname,'../vendor/mpv/mpv.exe'),{registerWindow,miniBounds:store.get('miniBounds',null),log});
   protocol.handle('art',async request=>{try{
     const item=store.item(new URL(request.url).hostname);if(!item||item.root!==library.root||!item.cover||item.hidden)return new Response('',{status:404});
     const absolute=await fsp.realpath(path.resolve(library.root,item.cover));if(!within(await fsp.realpath(library.root),absolute))return new Response('',{status:403});return net.fetch(pathToFileURL(absolute).toString());
@@ -167,7 +181,10 @@ app.whenReady().then(async()=>{
   main.webContents.session.setPermissionRequestHandler((_,__,callback)=>callback(false));
   main.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(_,callback)=>callback({cancel:true}));
   player.on('state',state=>{send('player',state);if(!state.paused&&sequence.currentId&&(blocker==null||!powerSaveBlocker.isStarted(blocker)))blocker=powerSaveBlocker.start('prevent-display-sleep');else if(state.paused&&blocker!=null&&powerSaveBlocker.isStarted(blocker))powerSaveBlocker.stop(blocker);});
-  player.on('ended',ended);player.on('failure',error=>{cancelCountdown();send('failure',error);});
+  player.on('ended',ended);player.on('failure',error=>{
+    cancelCountdown();send('failure',error);
+    if(!opening){const attempt=playbackAttempt;void serial(async()=>{if(attempt===playbackAttempt)await stop();}).catch(e=>send('failure',e.message));}
+  });
   player.on('mode',()=>send('playback',playback()));player.on('mini-bounds',bounds=>store.set('miniBounds',bounds));
   screen.on('display-removed',()=>{if(player.mode==='mini')void player.setMode('mini');});
   main.on('close',()=>{cancelCountdown();saveProgress();clearInterval(progressTimer);player.destroy();});

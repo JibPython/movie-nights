@@ -5,7 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { Store } = require('../desktop/store.cjs');
 const { Library } = require('../desktop/library.cjs');
-const { validName, within, episodeInfo, compareEpisodes, cinemaAt, recommendations } = require('../desktop/core.cjs');
+const { validName, within, episodeInfo, compareEpisodes, cinemaAt } = require('../desktop/core.cjs');
+const { Sequence } = require('../desktop/sequence.cjs');
 async function fixture(t) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(),'matinee-test-'));
   const root = path.join(temp,'Movies'); await fs.mkdir(root);
@@ -30,12 +31,15 @@ test('Episodes sort numerically and custom order overrides season order',()=>{
   assert.equal(episodes.sort(compareEpisodes)[0].title,'Two');
   assert.equal([...episodes,{title:'Special',season:0,episode:1,order:0}].sort(compareEpisodes)[0].title,'Special');
 });
-test('Recommendations prioritise next episode and exclude missing titles',()=>{
-  const current={id:'1',series:'A',season:1,episode:1,title:'One',genre:'Drama'};
-  const next={...current,id:'2',episode:2,title:'Two'};
-  const items=[current,{...current,id:'3',episode:10,title:'Ten'},next,{id:'4',title:'Missing',genre:'Drama',missing:true},{id:'5',title:'Movie',genre:'Drama'}];
-  const results=recommendations(items,current,true,()=>.5);
-  assert.equal(results[0].id,'2');assert.equal(results.some(i=>i.id==='4'),false);assert.equal(results.some(i=>i.id==='1'),false);
+test('Suggestions use folder display names and ignore series metadata and unavailable items',()=>{
+  const current={id:'1',file:'Show/one.mp4',series:'A',episode:1,title:'Episode 1'};
+  const items=[current,{...current,id:'2',file:'Show/two.mp4',episode:10,title:'Episode 2'},
+    {...current,id:'3',file:'Show/ten.mp4',episode:2,title:'Episode 10'},
+    {...current,id:'4',file:'Show/missing.mp4',missing:true},
+    {...current,id:'5',file:'Other/movie.mp4'},
+    {...current,id:'6',file:'Show/hidden.mp4',hidden:true}];
+  const sequence=new Sequence({items:()=>items});sequence.start('1');
+  assert.deepEqual(sequence.upNext(),['2','3']);
 });
 test('Import copies into the chosen directory, keeps the source, and rejects collisions',async t=>{
   const {temp,library}=await fixture(t);const video=path.join(temp,'source.mp4');await fs.writeFile(video,'movie-data');

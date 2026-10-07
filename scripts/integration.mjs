@@ -22,6 +22,14 @@ const app=await electron.launch({args:['.','--test-session'],cwd:path.resolve('.
 const errors=[];
 try{
  const page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
+ const waitForState=async predicate=>{
+  const deadline=Date.now()+30000;
+  while(!predicate(await page.evaluate(()=>window.astra.snapshot()))){
+   if(Date.now()>deadline)throw new Error('Timed out waiting for playback state');
+   await page.waitForTimeout(100);
+  }
+ };
+ await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.show();w.focus();});
  await page.getByRole('button',{name:'Open folder Bleach',exact:true}).waitFor();
  await page.getByRole('button',{name:'Collapse Recently added'}).click();
  await page.getByRole('button',{name:'Expand Recently added'}).waitFor();
@@ -46,7 +54,7 @@ try{
  await page.getByRole('button',{name:'Playback speed',exact:true}).click();
  await page.getByRole('menuitemradio',{name:'1.5×',exact:true}).click();
  await page.getByRole('slider',{name:'Playback position'}).fill('1');
- await page.waitForFunction(async()=>Math.abs((await window.astra.snapshot()).player.position-1)<.2);
+ await waitForState(s=>Math.abs(s.player.position-1)<.2);
  const bounds=await page.evaluate(()=>{const v=document.querySelector('.astra-video-frame').getBoundingClientRect(),c=document.querySelector('.astra-controls').getBoundingClientRect();return {v:{bottom:v.bottom,width:v.width},c:{top:c.top,width:c.width,bottom:c.bottom},height:innerHeight};});
  assert.ok(bounds.v.bottom<=bounds.c.top+1);assert.ok(Math.abs(bounds.v.width-bounds.c.width)<1);assert.ok(bounds.c.bottom<=bounds.height);
  const slider=await page.getByRole('slider',{name:'Playback position'}).boundingBox();
@@ -55,7 +63,7 @@ try{
  assert.equal(await page.getByRole('tooltip').textContent(),'0:04');
  await page.screenshot({path:path.join(output,'astra-watch.png')});
  await page.getByRole('button',{name:'Fullscreen',exact:true}).click();
- await page.waitForFunction(async()=>(await window.astra.snapshot()).playback.mode==='fullscreen');
+ await waitForState(s=>s.playback.mode==='fullscreen');
  const controls=app.windows().find(p=>p.url().includes('surface=controls'));
  assert.ok(controls);controls.on('pageerror',e=>errors.push(e.message));
  await controls.evaluate(()=>window.astra.pinControls(true));
@@ -82,7 +90,7 @@ try{
  await controls.getByRole('button',{name:'Restore player',exact:true}).click();
  snapshot=await page.evaluate(()=>window.astra.snapshot());assert.equal(snapshot.player.speed,1.5);assert.ok(snapshot.player.position>=1);assert.equal(snapshot.player.paused,true);
  await page.getByRole('button',{name:'Play next',exact:true}).click();
- await page.waitForFunction(async()=>{const s=await window.astra.snapshot();return s.items.find(i=>i.id===s.playback.currentId)?.title==='Episode 10';});
+ await waitForState(s=>s.items.find(i=>i.id===s.playback.currentId)?.title==='Episode 10');
  await page.getByRole('button',{name:'Stop video',exact:true}).click();
  await page.evaluate(()=>window.astra.browse('Bleach\\Concentrated Bleach'));
  await page.getByRole('button',{name:'Edit Episode 1',exact:true}).click();
