@@ -1,0 +1,116 @@
+[
+  {
+    "id": "light",
+    "name": "Light",
+    "scheme": "light",
+    "palette": {
+      "background": "#f3f7fc",
+      "sidebar": "#e7eef8",
+      "cards": "#ffffff",
+      "raised": "#ffffff",
+      "text": "#182a43",
+      "muted": "#506580",
+      "border": "#c8d6e7",
+      "accent": "#1766bd",
+      "buttonText": "#ffffff",
+      "hover": "#dceaff",
+      "selection": "#c2ddff",
+      "controls": "#14243b",
+      "success": "#16815d",
+      "warning": "#986300",
+      "error": "#be3549"
+    },
+    "font": "Segoe UI Variable",
+    "effects": {
+      "opacity": 95,
+      "blur": 12,
+      "gloss": 15,
+      "radius": 16,
+      "shadow": 25,
+      "motion": true
+    },
+    "background": {
+      "image": "",
+      "fit": "cover",
+      "position": "center",
+      "dim": 25
+    },
+    "decoration": "none"
+  },
+  {
+    "id": "navy",
+    "name": "Navy",
+    "scheme": "dark",
+    "palette": {
+      "background": "#0b1425",
+      "sidebar": "#101e34",
+      "cards": "#16263e",
+      "raised": "#20334f",
+      "text": "#eef5ff",
+      "muted": "#aec0d8",
+      "border": "#354c6a",
+      "accent": "#77baff",
+      "buttonText": "#0a1930",
+      "hover": "#253e5f",
+      "selection": "#304f79",
+      "controls": "#091222",
+      "success": "#69dbb4",
+      "warning": "#ffd383",
+      "error": "#ff91a3"
+    },
+    "font": "Segoe UI Variable",
+    "effects": {
+      "opacity": 95,
+      "blur": 12,
+      "gloss": 15,
+      "radius": 16,
+      "shadow": 25,
+      "motion": true
+    },
+    "background": {
+      "image": "",
+      "fit": "cover",
+      "position": "center",
+      "dim": 25
+    },
+    "decoration": "none"
+  },
+  {
+    "id": "aero",
+    "name": "Frutiger Aero",
+    "scheme": "light",
+    "palette": {
+      "background": "#c7efff",
+      "sidebar": "#d5f5ff",
+      "cards": "#eefbff",
+      "raised": "#ffffff",
+      "text": "#073c64",
+      "muted": "#326781",
+      "border": "#73bddc",
+      "accent": "#007cad",
+      "buttonText": "#ffffff",
+      "hover": "#b1efff",
+      "selection": "#88dbf5",
+      "controls": "#103e5a",
+      "success": "#087b52",
+      "warning": "#936000",
+      "error": "#be2441"
+    },
+    "font": "Segoe UI",
+    "effects": {
+      "opacity": 78,
+      "blur": 20,
+      "gloss": 65,
+      "radius": 22,
+      "shadow": 35,
+      "motion": true
+    },
+    "background": {
+      "image": "",
+      "fit": "cover",
+      "position": "center",
+      "dim": 25
+    },
+    "decoration": "aero"
+  }
+]

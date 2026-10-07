@@ -1,6 +1,6 @@
 {
   "name": "astra",
-  "version": "0.2.1",
+  "version": "0.3.4",
   "description": "A quiet place for your local movie collection",
   "author": "Astra",
   "private": true,
@@ -15,11 +15,14 @@
     "smoke": "npm run build && electron . --smoke-test",
     "test:desktop": "npm run build && node scripts/create-fixture.cjs && node scripts/integration.mjs",
     "test:formats": "node scripts/create-fixture.cjs && node scripts/formats.mjs",
-    "test:playback": "npm run build && node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/playback-check.mjs && node scripts/playback-check.mjs --compatibility",
-    "test:packaged": "node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/playback-check.mjs --packaged && node scripts/playback-check.mjs --packaged --compatibility",
-    "package": "npm run build && node scripts/check-player.mjs && electron-builder --win portable nsis --x64"
+    "test:playback": "npm run build && node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/create-fixture.cjs --long && node scripts/create-av-fixture.mjs --long && node scripts/playback-check.mjs && node scripts/playback-check.mjs --compatibility",
+    "test:packaged": "node scripts/create-fixture.cjs && node scripts/create-av-fixture.mjs && node scripts/create-fixture.cjs --long && node scripts/create-av-fixture.mjs --long && node scripts/playback-check.mjs --packaged && node scripts/playback-check.mjs --packaged --compatibility",
+    "package": "npm run build && node scripts/check-player.mjs && electron-builder --publish never --win portable nsis --x64 && node scripts/release-manifest.mjs",
+    "test:themes": "npm run build && node scripts/theme-check.mjs",
+    "test:visible": "node scripts/playback-check.mjs --capture-native && node scripts/playback-check.mjs --compatibility --capture-native"
   },
   "dependencies": {
+    "koffi": "3.3.2",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -28,21 +31,56 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "7zip-bin": "^5.2.0",
     "electron": "44.5.1",
     "electron-builder": "^26.0.0",
+    "playwright": "^1.51.0",
     "typescript": "^5.7.2",
-    "vite": "^6.1.0",
-    "7zip-bin": "^5.2.0",
-    "playwright": "^1.51.0"
+    "vite": "^6.1.0"
   },
   "build": {
     "appId": "local.matinee.desktop",
     "productName": "Astra",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "desktop/**/*", "assets/**/*", "package.json"],
-    "extraResources": [{ "from": "vendor/mpv", "to": "mpv" }, { "from": "THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md" }],
-    "win": { "target": "portable", "signExecutable": false, "icon": "assets/astra.ico" },
-    "portable": { "artifactName": "Astra-${version}-Windows.exe" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "runAfterFinish": false, "artifactName": "Astra-${version}-Setup.exe" }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/mpv",
+        "to": "mpv"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "signExecutable": false,
+      "icon": "assets/astra.ico"
+    },
+    "portable": {
+      "artifactName": "Astra-${version}-Windows.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": false,
+      "artifactName": "Astra-${version}-Setup.exe"
+    },
+    "asarUnpack": [
+      "node_modules/@koromix/**/*",
+      "node_modules/koffi/**/*"
+    ]
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

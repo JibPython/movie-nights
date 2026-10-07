@@ -1,0 +1,51 @@
+name: Build Windows draft release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: astra-release
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run setup:player
+      - run: npm test
+      - run: npm run package
+      - name: Prepare and upload a draft only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version' }
+          $tag = "v$version"
+          $existing = gh release list --limit 1000 --json tagName,isDraft | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check existing releases' }
+          if ($existing.tagName -contains $tag) { throw "Release $tag already exists; no assets were overwritten. Use a new version." }
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve built commit' }
+          $tagRefs = git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check remote tags' }
+          if ($tagRefs) { throw "Tag $tag already exists; use a new version." }
+          $files = @("release/Astra-$version-Windows.exe", "release/Astra-$version-Setup.exe")
+          Copy-Item THIRD_PARTY_NOTICES.md release/
+          Copy-Item vendor/mpv/BUILD-SOURCE.json release/
+          Copy-Item vendor/mpv/LICENSE.GPL release/mpv-LICENSE.GPL
+          Copy-Item vendor/mpv/LICENSE.LGPL release/mpv-LICENSE.LGPL
+          Copy-Item node_modules/koffi/LICENSE.txt release/Koffi-LICENSE.txt
+          $files += @('release/THIRD_PARTY_NOTICES.md','release/BUILD-SOURCE.json','release/mpv-LICENSE.GPL','release/mpv-LICENSE.LGPL','release/Koffi-LICENSE.txt')
+          $hashes = $files | ForEach-Object { "{0}  {1}" -f (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLower(), (Split-Path $_ -Leaf) }
+          $hashes | Set-Content release/SHA256SUMS.txt -Encoding utf8
+          $files += 'release/SHA256SUMS.txt'
+          "Built from commit $commit. Installer and portable executable include the offline player. Review and test before publishing." | Set-Content release/RELEASE-NOTES.md
+          gh release create $tag @files --draft --target $commit --title "Astra $version" --notes-file release/RELEASE-NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed; inspect the draft before retrying.' }

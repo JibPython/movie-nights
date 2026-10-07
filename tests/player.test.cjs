@@ -6,11 +6,11 @@ const vm=require('node:vm');
 const {EventEmitter}=require('node:events');
 const {PlaybackLog}=require('../desktop/playback-log.cjs');
 
-function harness({overlayError=false,spawnError=false}={}) {
+function harness({overlayError=false,spawnError=false,clock=Date}={}) {
   const children=[],intervals=[];
   class Window extends EventEmitter {
     constructor(){super();this.visible=false;this.destroyed=false;this.bounds={x:0,y:0,width:800,height:600};}
-    setIgnoreMouseEvents(){} getNativeWindowHandle(){return Buffer.alloc(8,1);}
+    setIgnoreMouseEvents(){throw new Error('Video host must never use layered click-through');} getNativeWindowHandle(){return Buffer.alloc(8,1);}
     async loadFile(){if(overlayError)throw new Error('Controls failed to load');}
     isDestroyed(){return this.destroyed;} destroy(){this.destroyed=true;this.visible=false;}
     isVisible(){return this.visible;} isMinimized(){return false;}
@@ -26,9 +26,9 @@ function harness({overlayError=false,spawnError=false}={}) {
   const net={createConnection(){const socket=new EventEmitter();socket.destroyed=false;socket.destroy=()=>{socket.destroyed=true;socket.emit('close');};queueMicrotask(()=>spawnError?socket.emit('error',new Error('No pipe')):socket.emit('connect'));return socket;}};
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/player.cjs'),'utf8'),{
-    module,__dirname:path.join(__dirname,'../desktop'),Buffer,process,setTimeout,clearTimeout,clearInterval,
+    Date:clock,module,__dirname:path.join(__dirname,'../desktop'),Buffer,process,setTimeout,clearTimeout,clearInterval,
     setInterval:(callback,delay)=>{intervals.push(callback);return setInterval(callback,delay);},
-    require:name=>name==='electron'?{BrowserWindow:Window,screen:{getCursorScreenPoint:()=>({x:0,y:0})}}:name==='node:child_process'?{spawn:fakeSpawn}:name==='node:net'?net:require(name),
+    require:name=>name==='./native-video.cjs'?{raiseVideo:()=>true}:name==='electron'?{BaseWindow:Window,BrowserWindow:Window,screen:{getCursorScreenPoint:()=>({x:0,y:0})}}:name==='node:child_process'?{spawn:fakeSpawn}:name==='node:net'?net:require(name),
   });
   const parent=new Window();parent.visible=true;
   const player=new module.exports.Player(parent,'test-mpv.exe');
@@ -106,4 +106,33 @@ test('Playback logs rotate within a fixed disk budget and tolerate write errors'
   log.write('large-unicode',{text:'\u{1f3ac}'.repeat(10000)});assert.ok(fs.statSync(log.file).size<=8192);
   const blocked=path.join(directory,'file');fs.writeFileSync(blocked,'not a directory');
   assert.doesNotThrow(()=>new PlaybackLog(blocked).write('test'));
+});
+
+
+test('Sub-10ms clock updates keep playback alive; identical timestamps still time out',async t=>{
+  let now=100000;const {player,intervals}=harness({clock:{now:()=>now}});
+  t.after(()=>player.destroy());player.start=async()=>{};
+  player.command=async args=>{if(args[0]==='loadfile')queueMicrotask(()=>player.message({event:'file-loaded'}));};
+  await player.load('fixture.mp4');let failures=0;player.on('failure',()=>failures++);
+  const tick=intervals.at(-1);
+  for(let n=1;n<=4000;n++){
+    now+=5;player.message({event:'property-change',name:'time-pos',data:n*.005});
+    if(n%200===0)tick();
+  }
+  assert.equal(failures,0);assert.equal(player.state.position,20);
+  // A seek backwards is also activity, but repeated unchanged notifications are not.
+  now+=1000;player.message({event:'property-change',name:'time-pos',data:2});tick();
+  for(let n=0;n<16;n++){now+=1000;player.message({event:'property-change',name:'time-pos',data:2});tick();}
+  assert.equal(failures,1);assert.equal(player.state.paused,true);
+});
+
+
+test('Frequent position notifications update internal progress but bound renderer redraws',t=>{
+  let now=100000;const {player}=harness({clock:{now:()=>now}});t.after(()=>player.destroy());
+  let updates=0;player.on('state',()=>updates++);
+  for(let n=1;n<=1000;n++){now+=1;player.message({event:'property-change',name:'time-pos',data:n*.002});}
+  assert.ok(updates<=11);assert.equal(player.state.position,2);assert.equal(player.lastAdvance,now);
+  player.message({event:'property-change',name:'pause',data:true});assert.equal(updates,11);
+  player.message({event:'property-change',name:'speed',data:2});assert.equal(updates,12);
+  assert.equal(player.state.speed,2);assert.equal(player.state.paused,true);
 });

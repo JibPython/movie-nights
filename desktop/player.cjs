@@ -1,5 +1,6 @@
-const { BrowserWindow, screen } = require('electron');
+const { BaseWindow, BrowserWindow, screen } = require('electron');
 const path = require('node:path');
+const {raiseVideo}=require('./native-video.cjs');
 const { spawn } = require('node:child_process');
 const net = require('node:net');
 const { EventEmitter } = require('node:events');
@@ -7,7 +8,7 @@ class Player extends EventEmitter {
   constructor(parent, executable, {registerWindow = () => {}, miniBounds = null, log = {write() {}}} = {}) {
     super(); this.parent = parent; this.executable = executable; this.sequence = 0; this.pending = new Map(); this.rect = null; this.hidden = false;
     this.mode='default';this.registerWindow=registerWindow;this.miniBounds=miniBounds;this.pinned=false;this.lastMotion=0;
-    this.log=log;this.compatibility=false;this.lastProgressLog=0;
+    this.log=log;this.compatibility=false;this.lastProgressLog=0;this.lastPositionState=0;
     this.state = { position: 0, duration: 0, paused: true, volume: 80, speed: 1, tracks: [], loading: false };
     parent.on('move', () => this.layout()); parent.on('resize', () => this.layout());
     parent.on('show', () => this.layout()); parent.on('enter-full-screen', () => this.layout()); parent.on('leave-full-screen', () => this.layout());
@@ -22,10 +23,12 @@ class Player extends EventEmitter {
   async initialize() {
     this.stopping = false;
     this.lastGeometry=null;
-    this.log.write('engine-start',{executable:this.executable,compatibility:this.compatibility});
+    this.log.write('engine-start',{executable:this.executable,compatibility:this.compatibility,host:'BaseWindow'});
     try {
-    this.window = new BrowserWindow({ parent: this.parent, show: false, frame: false, skipTaskbar: true, focusable: false, backgroundColor: '#090909', resizable: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
-    this.window.setIgnoreMouseEvents(true);
+    // mpv owns this HWND. A Chromium surface here can paint over decoded video.
+    this.window = new BaseWindow({ title:'Astra video', parent: this.parent, show: false, frame: false, skipTaskbar: true, focusable: false, backgroundColor: '#090909', resizable: false });
+    // Electron click-through sets WS_EX_LAYERED on Windows, which can hide
+    // mpv's Direct3D swap chain. Keep the video HWND opaque.
     this.window.on('move',()=>{if(this.mode==='mini'){this.alignOverlay();this.saveMiniBounds();}});
     this.window.on('resize',()=>{this.alignOverlay();if(this.mode==='mini')this.saveMiniBounds();});
     this.overlay = new BrowserWindow({parent:this.window,show:false,frame:false,transparent:true,backgroundColor:'#00000000',skipTaskbar:true,resizable:false,hasShadow:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
@@ -35,7 +38,7 @@ class Player extends EventEmitter {
     this.hoverTimer=setInterval(()=>this.checkHover(),100);
     const hwnd = this.window.getNativeWindowHandle().readUInt32LE(0);
     const pipe = `\\\\.\\pipe\\astra-${process.pid}-${Date.now()}`;
-    this.process = spawn(this.executable, [`--wid=${hwnd}`, `--input-ipc-server=${pipe}`, '--idle=yes', '--keep-open=yes', '--force-window=yes', '--no-config', '--terminal=yes', '--input-terminal=no', '--msg-color=no', '--msg-level=all=warn', '--term-osd=no', '--osc=no', '--input-default-bindings=no', '--input-vo-keyboard=no', '--input-cursor=no', '--cursor-autohide=no', ...(this.compatibility?['--hwdec=no','--vo=gpu,direct3d','--gpu-api=d3d11','--gpu-context=d3d11']:['--hwdec=auto-safe']), '--volume=80', '--ytdl=no'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    this.process = spawn(this.executable, [`--wid=${hwnd}`, `--input-ipc-server=${pipe}`, '--idle=yes', '--keep-open=yes', '--force-window=yes', '--no-config', '--terminal=yes', '--input-terminal=no', '--msg-color=no', '--msg-level=all=warn', '--term-osd=no', '--osc=no', '--input-default-bindings=no', '--input-vo-keyboard=no', '--input-cursor=yes', '--cursor-autohide=no', ...(this.compatibility?['--hwdec=no','--vo=gpu,direct3d','--gpu-api=d3d11','--gpu-context=d3d11']:['--hwdec=auto-safe']), '--volume=80', '--ytdl=no'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const child=this.process;
     let startupError; this.process.once('error', e => { startupError = e; });
     for(const stream of [child.stdout,child.stderr])stream.on('data',data=>this.log.write('engine-output',{text:data.toString().slice(-6000)}));
@@ -62,6 +65,7 @@ class Player extends EventEmitter {
       this.socket.on('data', data => { if(this.socket!==connected)return;buffer += data.toString(); let newline; while ((newline = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); try { this.message(JSON.parse(line)); } catch {} } });
       const properties = ['time-pos', 'duration', 'pause', 'volume', 'speed', 'track-list', 'eof-reached', 'mute', 'sub-delay','current-vo','current-ao','hwdec-current','video-params','audio-params'];
       for (const [id, prop] of properties.entries()) await this.command(['observe_property', id + 1, prop]);
+      await this.command(['keybind','MBTN_LEFT_DBL','script-message astra-toggle-fullscreen']);
       this.log.write('engine-connected');
     } catch (e) { this.destroy();this.log.write('startup-failed',{message:e.message});throw new Error(`Astra could not start its playback engine: ${e.message}. If the player is missing, reinstall Astra. Details are in Settings > Open playback log.`); }
   }
@@ -70,19 +74,25 @@ class Player extends EventEmitter {
     this.log.write('playback-failed',{message});this.emit('state',this.state);this.emit('failure',`${message} Details are in Settings > Open playback log.`);
   }
   message(message) {
+    if(message.event==='client-message'&&message.args?.[0]==='astra-toggle-fullscreen')this.emit('toggle-fullscreen');
     if (message.request_id && this.pending.has(message.request_id)) {
       const p = this.pending.get(message.request_id); this.pending.delete(message.request_id); clearTimeout(p.timer);
       if (message.error === 'success') p.resolve(message.data); else p.reject(new Error(message.error));
     }
     if (message.event === 'property-change') {
-      if((message.name==='time-pos'&&Number.isFinite(message.data)&&Math.abs(message.data-this.state.position)>.01)||message.name==='pause')this.lastAdvance=Date.now();
+      // mpv can update faster than 10ms; every changed finite timestamp is progress.
+      if((message.name==='time-pos'&&Number.isFinite(message.data)&&message.data!==this.state.position)||message.name==='pause')this.lastAdvance=Date.now();
       if(['current-vo','current-ao','hwdec-current','video-params','audio-params'].includes(message.name))this.log.write('output',{name:message.name,value:message.data??null});
       const map = { 'time-pos': 'position', duration: 'duration', pause: 'paused', volume: 'volume', speed: 'speed', 'track-list': 'tracks', mute: 'muted', 'sub-delay': 'subtitleDelay' };
       if (map[message.name] && message.data != null) this.state[map[message.name]] = message.data;
       if (message.name === 'eof-reached' && message.data === false) this.ended = false;
       if (message.name === 'eof-reached' && message.data === true && !this.ended) { this.ended = true; this.emit('ended'); }
-      this.emit('state', this.state);
-      if(message.name==='time-pos'&&Date.now()-this.lastProgressLog>=5000){this.lastProgressLog=Date.now();this.log.write('progress',{position:this.state.position,duration:this.state.duration,paused:this.state.paused,volume:this.state.volume,muted:this.state.muted});}
+      // Keep decoding/watchdog precise without redrawing every renderer at mpv's rate.
+      if(message.name!=='time-pos'||Date.now()-this.lastPositionState>=100){
+        if(message.name==='time-pos')this.lastPositionState=Date.now();
+        this.emit('state',this.state);
+      }
+      if(message.name==='time-pos'&&Date.now()-this.lastProgressLog>=5000){this.lastProgressLog=Date.now();this.log.write('progress',{position:this.state.position,duration:this.state.duration,paused:this.state.paused,volume:this.state.volume,muted:this.state.muted,speed:this.state.speed});}
     }
     if (message.event === 'file-loaded') { this.state.loading = false;this.log.write('file-loaded'); this.emit('state', this.state); this.emit('loaded'); }
     if (message.event === 'end-file')this.log.write('end-file',{reason:message.reason,error:message.file_error});
@@ -137,13 +147,14 @@ class Player extends EventEmitter {
       const b = this.parent.getContentBounds(); const r = this.mode==='fullscreen'?{x:0,y:0,width:b.width,height:b.height}:this.rect;
       this.window.setBounds({ x: Math.round(b.x + r.x), y: Math.round(b.y + r.y), width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)) });
     }
-    this.window.showInactive();
+    this.window.showInactive();raiseVideo(this.window,this.mode==='mini');
     if(this.mode==='mini')this.window.setAlwaysOnTop(true);
     this.alignOverlay();this.checkHover();
   }
   alignOverlay() { if(this.overlay&&!this.overlay.isDestroyed()&&this.window&&!this.window.isDestroyed())this.overlay.setBounds(this.window.getContentBounds()); }
   saveMiniBounds() { this.miniBounds=this.window.getBounds();this.emit('mini-bounds',this.miniBounds); }
   checkHover() {
+    if(this.window?.isVisible())raiseVideo(this.window,this.mode==='mini');
     if(!this.overlay||this.overlay.isDestroyed()||!this.window||!this.window.isVisible()||this.hidden||this.mode==='default'){this.overlay?.hide();return;}
     const b=this.window.getBounds(),p=screen.getCursorScreenPoint();
     const inside=p.x>=b.x&&p.x<=b.x+b.width&&p.y>=b.y&&p.y<=b.y+b.height;

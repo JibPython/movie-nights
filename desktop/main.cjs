@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
+const themes = require('./themes.cjs');
 const { Store } = require('./store.cjs');
 const { Library } = require('./library.cjs');
 const { Player } = require('./player.cjs');
@@ -16,16 +17,16 @@ app.setName('Astra');
 const profile = smoke || testSession ? path.resolve('.test-output',testSession?'astra-integration-profile':'astra-smoke-profile') : path.join(app.getPath('appData'),'Astra');
 app.setPath('userData',profile);
 if(!app.requestSingleInstanceLock()){app.quit();return;}
-protocol.registerSchemesAsPrivileged([{ scheme:'art', privileges:{standard:true,secure:true,supportFetchAPI:true} }]);
+protocol.registerSchemesAsPrivileged(['art','theme-art'].map(scheme=>({scheme,privileges:{standard:true,secure:true,supportFetchAPI:true}})));
 let main,store,library,player,sequence,blocker,progressTimer,countdownTimer,countdown=null,opening=false,playbackAttempt=0,progressId=null;
 let operations=Promise.resolve();
 const windows=new Map();const selections=new Map();
-const defaults={theme:'auto',cinemaStart:19,cinemaEnd:7,autoplay:true,shuffle:false,repeat:'off',volume:80,speed:1,textScale:125,playbackCompatibility:false};
+const defaults={activeThemeId:'navy',autoplay:true,shuffle:false,repeat:'off',volume:80,speed:1,textScale:125,playbackCompatibility:false};
 function preferences(){const prefs={...defaults,...store.get('preferences',{})};if(prefs.repeat==='queue')prefs.repeat='all';return prefs;}
 function send(event,data){for(const [win] of windows)if(!win.isDestroyed())win.webContents.send(event,data);}
 function queueKey(){return `queue:${library.root}`;}
 function playback(){return {currentId:sequence?.currentId??null,mode:player?.mode??'default',countdown,opening,source:sequence?.source??'folder'};}
-function snapshot(){return {root:library.root,items:library.items(),browser:library.browser(),queue:sequence.clean(sequence.queue),upNext:sequence.upNext(),settings:preferences(),collapsed:store.get(`collapsed:${library.root}`,{}),playback:playback(),player:player.state,playerReady:fs.existsSync(player.executable)};}
+function snapshot(){return {root:library.root,items:library.items(),browser:library.browser(),queue:sequence.clean(sequence.queue),upNext:sequence.upNext(),settings:preferences(),themes:themes.list(store),collapsed:store.get(`collapsed:${library.root}`,{}),playback:playback(),player:player.state,playerReady:fs.existsSync(player.executable)};}
 function changed(){store.set(queueKey(),sequence.queue);send('library',snapshot());}
 function resetSequence(){sequence=new Sequence({items:()=>library.items(),queue:store.get(queueKey(),[])});sequence.configure(preferences());}
 function saveProgress(ended=false){if(progressId&&sequence?.currentId===progressId)library.progressFor(progressId,player.state.position??0,player.state.duration??0,ended);}
@@ -34,7 +35,7 @@ function serial(work){const result=operations.then(work);operations=result.catch
 function registerWindow(win,role){
   windows.set(win,role);win.on('closed',()=>windows.delete(win));win.setMenu(null);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());
-  win.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'&&player?.mode==='fullscreen'){event.preventDefault();player.setMode('default').catch(e=>send('failure',e.message));}});
+  win.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'&&player?.mode==='fullscreen'){event.preventDefault();serial(()=>player.setMode('default')).catch(e=>send('failure',e.message));}});
 }
 async function nativeDialog(options){const old=player.hidden;player.hidden=true;player.layout();try{return await dialog.showOpenDialog(main,options);}finally{player.hidden=old;player.layout();}}
 async function load(id,{advance=false,fromQueue=false,restart=false}={}){
@@ -120,11 +121,12 @@ async function action(method,...args){
       const [operation,value]=args;
       if(operation==='append')sequence.append(value);else if(operation==='remove')sequence.remove(value);else if(operation==='clear')sequence.clear();else if(operation==='reorder')sequence.reorder(value);else throw new Error('Unknown queue action.');changed();return snapshot();
     }
+    case 'theme':return serial(async()=>{const result=await themes.action(store,args[0],args[1],{dialog,main,assetDirectory:path.join(profile,'theme-assets')});changed();return result;});
     case 'settings':{
       const input=args[0],prefs=preferences();
-      if(input.theme!=null){if(!['auto','warm','cinema'].includes(input.theme))throw new Error('Invalid theme.');prefs.theme=input.theme;}
+      if(input.activeThemeId!=null){if(!themes.list(store).some(t=>t.id===input.activeThemeId))throw new Error('Unknown theme.');prefs.activeThemeId=input.activeThemeId;}
       if(input.textScale!=null){if(!Number.isInteger(input.textScale)||input.textScale<100||input.textScale>200||input.textScale%5)throw new Error('Text size must be 100–200%, in 5% steps.');prefs.textScale=input.textScale;}
-      for(const key of ['cinemaStart','cinemaEnd'])if(input[key]!=null){if(!Number.isInteger(input[key])||input[key]<0||input[key]>23)throw new Error('Schedule hours must be 0–23.');prefs[key]=input[key];}
+
       for(const key of ['autoplay','shuffle','playbackCompatibility'])if(input[key]!=null)prefs[key]=Boolean(input[key]);
       if(input.repeat!=null){if(!['off','one','all'].includes(input.repeat))throw new Error('Invalid repeat mode.');prefs.repeat=input.repeat;}
       for(const [key,min,max]of[['volume',0,100],['speed',.25,3]])if(input[key]!=null){if(!Number.isFinite(input[key])||input[key]<min||input[key]>max)throw new Error(`Invalid ${key}.`);prefs[key]=input[key];}
@@ -148,7 +150,7 @@ async function action(method,...args){
       const b=main.getContentBounds();if(r.x<0||r.y<0||r.x+r.width>b.width+1||r.y+r.height>b.height+1){player.viewport(null);return;}player.viewport(r);return;
     }
     case 'obscure':player.hidden=Boolean(args[0])&&player.mode!=='mini';player.layout();return;
-    case 'mode':await player.setMode(args[0]);changed();return snapshot();
+    case 'mode':return serial(async()=>{await player.setMode(args[0]);changed();return snapshot();});
     case 'pinControls':player.pinned=Boolean(args[0]);player.checkHover();return;
     case 'resizeMini':{
       if(player.mode!=='mini')return;const {width,height}=args[0];if(!Number.isFinite(width)||!Number.isFinite(height))return;
@@ -161,12 +163,13 @@ async function action(method,...args){
 app.on('second-instance',()=>{if(main){main.restore();main.show();main.focus();}});
 app.whenReady().then(async()=>{
   if(!smoke&&!testSession)await migrateProfile(path.join(app.getPath('appData'),'matinee'),profile);
-  store=new Store(profile);library=new Library(store,data=>send('progress',data));resetSequence();
+  store=new Store(profile);themes.migrate(store);library=new Library(store,data=>send('progress',data));resetSequence();
   main=new BrowserWindow({width:1440,height:960,minWidth:960,minHeight:640,frame:false,show:false,backgroundColor:'#f4f0e8',title:'Astra',icon:path.resolve(__dirname,'../assets/astra.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
   registerWindow(main,'main');
   const log=new PlaybackLog(path.join(profile,'logs'));
   log.write('app-start',{version:app.getVersion(),packaged:app.isPackaged,electron:process.versions.electron,arch:process.arch,windows:require('node:os').release()});
   player=new Player(main,app.isPackaged?path.join(process.resourcesPath,'mpv','mpv.exe'):path.resolve(__dirname,'../vendor/mpv/mpv.exe'),{registerWindow,miniBounds:store.get('miniBounds',null),log});
+  protocol.handle('theme-art',async request=>{try{const id=new URL(request.url).hostname;if(!/^[a-f0-9]{64}$/.test(id))return new Response('',{status:404});const bytes=await fsp.readFile(path.join(profile,'theme-assets',id));return new Response(bytes,{headers:{'Content-Type':bytes[0]===137?'image/png':bytes[0]===255?'image/jpeg':'image/webp'}});}catch{return new Response('',{status:404});}});
   protocol.handle('art',async request=>{try{
     const item=store.item(new URL(request.url).hostname);if(!item||item.root!==library.root||!item.cover||item.hidden)return new Response('',{status:404});
     const absolute=await fsp.realpath(path.resolve(library.root,item.cover));if(!within(await fsp.realpath(library.root),absolute))return new Response('',{status:403});return net.fetch(pathToFileURL(absolute).toString());
@@ -185,8 +188,9 @@ app.whenReady().then(async()=>{
     cancelCountdown();send('failure',error);
     if(!opening){const attempt=playbackAttempt;void serial(async()=>{if(attempt===playbackAttempt)await stop();}).catch(e=>send('failure',e.message));}
   });
+  player.on('toggle-fullscreen',()=>{void serial(()=>player.setMode(player.mode==='fullscreen'?'default':'fullscreen')).catch(e=>send('failure',e.message));});
   player.on('mode',()=>send('playback',playback()));player.on('mini-bounds',bounds=>store.set('miniBounds',bounds));
-  screen.on('display-removed',()=>{if(player.mode==='mini')void player.setMode('mini');});
+  screen.on('display-removed',()=>{if(player.mode==='mini')void serial(()=>player.setMode('mini')).catch(e=>send('failure',e.message));});
   main.on('close',()=>{cancelCountdown();saveProgress();clearInterval(progressTimer);player.destroy();});
   await main.loadFile(path.resolve(__dirname,'../dist/index.html'));if(!smoke&&!testSession)main.show();
   progressTimer=setInterval(()=>{if(!opening)saveProgress();},5000);

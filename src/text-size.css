@@ -55,7 +55,7 @@
 .text-size-presets button { flex: 1; padding: 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; font-size: calc(12px * var(--text-scale)); }
 .text-size-presets button[aria-pressed=true] { background: var(--soft); color: var(--accent); border-color: var(--accent); }
 .text-size-preview { border-left: 3px solid var(--accent); padding-left: 15px; margin-bottom: 16px; line-height: 1.6; }
-.text-size-preview strong { display: block; font-family: Georgia,serif; font-size: calc(20px * var(--text-scale)); font-weight: 400; }
+.text-size-preview strong { display: block; font-family: var(--font-ui); font-size: calc(20px * var(--text-scale)); font-weight: 400; }
 .text-size-preview span { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .watch-header { flex-wrap: wrap; gap: 10px; }
 .watch-header .eyebrow { display: none; }
